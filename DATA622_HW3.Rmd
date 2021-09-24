@@ -13,8 +13,12 @@ change 2
 library(RCurl)
 library(tidyverse)
 library(DataExplorer)
+library(caret)
+library(MASS)
+library(pROC)
 
-df <- read.csv("https://raw.githubusercontent.com/robertwelk/DATA622/main/Loan_approval.csv") %>% as_tibble()
+
+df <- read.csv("https://raw.githubusercontent.com/robertwelk/DATA622/main/Loan_approval.csv", na.strings=c(""," ", "NA")) %>% as_tibble()
 
 
 introduce(df)
@@ -34,7 +38,9 @@ df$Loan_Status <- as.factor(df$Loan_Status)
 
 # new features
 df$DEPENDENTS <- factor(ifelse(df$Dependents >=1, "YES", "NO")) # based on EDA
-df <- df %>% dplyr::select(!Dependents)
+
+### maybe should remove later####
+df <- df %>% dplyr::select(!c(Dependents,Loan_ID) )
 ```
 
 Diagnostic Plots
@@ -63,23 +69,64 @@ PreProcessing
 Handle Missing Values
 Feature Engineering
   -   for example, dependents could be yes or no
-One hot encoding for categorical
+One hot encoding for categoricals
+train test split
+transformations -> Boxcox
 
 ```{r}
+df <- df %>% filter(complete.cases(.))
 
-
+# Train/Test Split
+set.seed(2021)
+trainIndex <- createDataPartition(df$Loan_Status, p = .8) %>% unlist()
+training <- df[ trainIndex,]
+testing  <- df[-trainIndex,]
 ```
 
-
-
-LDA
+Cross Validation Setup
 ```{r}
 
+
+ctrl <- trainControl(method="cv", 
+                     number=10, 
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE)
+```
+
+LDA
+lda2 package
+tuning parameter: dimen
+method='lda2'
+preprocessing: center, scale, dummify
+
+```{r}
+
+train(Loan_Status ~ ., data=training, 
+                     method="lda2",
+                     tuneLength=20,
+                     #tuneGrid=ridgeGrid,
+                     trControl=ctrl)
+
+#lda(training[,-12], grouping=training[,12])
 ```
 
 KNN
 ```{r}
+knnFit <- train(Loan_Status ~ ., data=training, 
+                     method="knn",
+                     metric="ROC",
+                     #preProc=c("center","scale"),  
+                     tuneGrid=data.frame(.k=c(4*(0:5)+1, # what is this tune grid?
+                                           20*(1:5)+1,
+                                           50*(2:9)+1)),
+      trControl=ctrl)
 
+knnFit$pred <- merge(knnFit$pred, knnFit$bestTune)
+knnRoc <- roc(response = knnFit$pred$obs,
+              predictor=knnFit$pred$successful,
+              levels= rev(levels(knnFit$pred$obs)))
+
+plot(knnRoc, legacy.axes=T)
 ```
 
 Decision Tree
@@ -88,7 +135,15 @@ Decision Tree
 ```
 
 Random Forest
+package=
+tuning parameters=mtry 
 ```{r}
+# tune a random forest model 
+set.seed(1984)
+model1 <- train(y~., data=simulated,
+      method="rf",
+      tuneLength = 10,
+      trControl = trainControl(method="cv"))
 
 ```
 
