@@ -8,23 +8,31 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-change 2
+
+## Packages
+```{r message=F, warning=F}
+library(RCurl) # for import
+library(tidyverse) # cleaning/visuals
+library(DataExplorer) # EDA, dummy vars
+library(caret) # ML 
+library(MASS) # algorithms
+library(pROC) # classfication metrics
+```
+
+## Import data
+-pulled from GitHub repo
 ```{r}
-library(RCurl)
-library(tidyverse)
-library(DataExplorer)
-library(caret)
-library(MASS)
-library(pROC)
+df <- read.csv("https://raw.githubusercontent.com/robertwelk/DATA622/main/Loan_approval.csv", 
+               na.strings=c(""," ", "NA")) %>% 
+               as_tibble()
 
-
-df <- read.csv("https://raw.githubusercontent.com/robertwelk/DATA622/main/Loan_approval.csv", na.strings=c(""," ", "NA")) %>% as_tibble()
-
-
+# overview of raw data
 introduce(df)
 ```
 
-Change data types 
+## Clean Data table
+-Change data types 
+-remove non-predictive variables
 ```{r}
 str(df)
 
@@ -36,17 +44,15 @@ df$Credit_History <- as.factor(df$Credit_History)
 df$Property_Area <- as.factor(df$Property_Area)
 df$Loan_Status <- as.factor(df$Loan_Status)
 
-# new features
-df$DEPENDENTS <- factor(ifelse(df$Dependents >=1, "YES", "NO")) # based on EDA
-
-### maybe should remove later####
+### remove ID 
 df <- df %>% dplyr::select(!c(Dependents,Loan_ID) )
 ```
 
-Diagnostic Plots
-Density
-Boxplots
-Correlation 
+## EDA 
+-Density
+-Boxplots
+-Correlation 
+
 ```{r}
 plot_intro(df)
 plot_missing(df)
@@ -65,35 +71,64 @@ df %>% ggplot(aes(CoapplicantIncome, col=Loan_Status)) + geom_density()
 df %>% ggplot(aes(Loan_Amount_Term, col=Loan_Status)) + geom_density()
 ```
 
-PreProcessing
-Handle Missing Values
-Feature Engineering
-  -   for example, dependents could be yes or no
-One hot encoding for categoricals
-train test split
-transformations -> Boxcox
+## PreProcessing
 
+### Feature Engineering
+- Create features
+```{r}
+# new features
+df$DEPENDENTS <- factor(ifelse(df$Dependents >=1, "YES", "NO")) # based on EDA
+```
+
+### Impute Missing Values
+- any good imputation methods??
+- for now missing values have been removed
 ```{r}
 df <- df %>% filter(complete.cases(.))
+```
 
-# Train/Test Split
+### Dummy Variables
+-do not encode the target
+```{r}
+# dummy varaibles created for categorical variables using DataExplorer
+sapply(df,is.factor)
+df <- dummify(df, select = c("Gender", "Married","Education", "Self_Employed","Credit_History","Property_Area", "DEPENDENTS") )
+```
+
+### Center/Scale
+- all features centered and scaled
+```{r}
+center_scale <- preProcess(df, method = c("center", "scale"))
+predict(center_scale, df)
+```
+
+### Transformations
+are transformations needed?
+```{r}
+
+```
+
+### Train/Test Split
+-80/20 split
+```{r}
 set.seed(2021)
 trainIndex <- createDataPartition(df$Loan_Status, p = .8) %>% unlist()
 training <- df[ trainIndex,]
 testing  <- df[-trainIndex,]
 ```
 
-Cross Validation Setup
+### Cross Validation Setup
 ```{r}
-
-
 ctrl <- trainControl(method="cv", 
                      number=10, 
                      summaryFunction = twoClassSummary,
                      classProbs = TRUE)
 ```
 
-LDA
+
+## Build Models
+
+### LDA
 lda2 package
 tuning parameter: dimen
 method='lda2'
@@ -110,7 +145,7 @@ train(Loan_Status ~ ., data=training,
 #lda(training[,-12], grouping=training[,12])
 ```
 
-KNN
+### KNN
 ```{r}
 knnFit <- train(Loan_Status ~ ., data=training, 
                      method="knn",
@@ -129,25 +164,35 @@ knnRoc <- roc(response = knnFit$pred$obs,
 plot(knnRoc, legacy.axes=T)
 ```
 
-Decision Tree
+### Decision Tree
 ```{r}
-
+knnFit <- train(Loan_Status ~ ., data=training, 
+                     method="knn",
+                     metric="ROC",
+                     #preProc=c("center","scale"),  
+                     tuneGrid=data.frame(.k=c(4*(0:5)+1, # what is this tune grid?
+                                           20*(1:5)+1,
+                                           50*(2:9)+1)),
+      trControl=ctrl)
 ```
 
-Random Forest
+### Random Forest
 package=
 tuning parameters=mtry 
 ```{r}
 # tune a random forest model 
 set.seed(1984)
-model1 <- train(y~., data=simulated,
+model1 <- train(Loan_Status ~ ., data=training,
       method="rf",
       tuneLength = 10,
       trControl = trainControl(method="cv"))
 
 ```
 
-Compare Results
+## Compare Results
+based on accuracy metrics, ROC curves
+varaible importance to model
+interpretability?
 ```{r}
 
 ```
