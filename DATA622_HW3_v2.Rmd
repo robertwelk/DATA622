@@ -1,0 +1,402 @@
+---
+title: "DATA622_HW3"
+author: "Robert Welk, David Blumenstiel"
+date: "9/24/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Packages
+
+Here are the packages used in this assignment.  
+
+```{r message=F, warning=F}
+library(RCurl) # for import
+library(tidyverse) # cleaning/visuals
+library(DataExplorer) # EDA, dummy vars
+library(caret) # ML 
+library(MASS) # native algorithms
+library(pROC) # classification metrics
+library(mice) # imputation
+library(corrplot) #correlation
+```
+
+## Import data
+
+The dataset was uploaded to GitHub for ease of access and reproducability.  
+
+```{r}
+#Import the dataset
+df <- read.csv("https://raw.githubusercontent.com/robertwelk/DATA622/main/Loan_approval.csv", 
+               na.strings=c(""," ", "NA"),
+               stringsAsFactors = TRUE) %>% 
+               as_tibble()
+
+#Don't need this
+df$Loan_ID <- NULL
+
+#Credit history is coded as int, but should be factor
+
+df$Credit_History <-as.factor(df$Credit_History)
+
+
+# overview of raw data
+introduce(df)
+
+```
+
+Above is a breif overview of the dataset.  In total, there are 614 observations and 13 variables (including the response).  The dataset is a mix of continuous and discrete variables (4 and 8 respectively).  There is missing data: only 480 of the observations are complete.  
+
+
+## Exploratory Data Analysis
+
+Below the dataset is analyzed prior to any transformations.
+
+```{r}
+plot_intro(df)
+```
+
+Above is a breakdown of the types of data and missing data.  The majority of the data available, including the response variable (Loan Status) is discrete.  2.0% of the data is missing, and only 78.2% of the rows are complete, indicating that missing data is spead out across and not limited to specific observations.
+
+```{r}
+plot_missing(df, 
+             group = list(Good = 1), 
+             theme_config = list(legend.position = c("none")))
+```
+
+Above is the amount of missing data by variable.  6 of the variables have no missing data, while the remaining have different amounts.  No data from the response variable (Loan Status) is missing.  The variable with the most missing data is Credit History.
+
+Below we explore the relationship between the discrete variables and the response variable.
+
+```{r}
+print(paste0("Proportion of approved loans: ", round(length(which(df$Loan_Status == "Y"))/nrow(df),3)))
+plot_bar(df, by="Loan_Status")
+
+
+```
+
+Above are the porportions of the discrete independent variables according to their loan status.  There are a few observations one can make here.  Overall, the majority of observations have a loan status of Y, but some dependent variables seem to correlate to loan status
+
+Gender: Males ha their loans approved slightly more often than females, and both had their loans approved slightly more than for those whom gender was not recorded.
+
+Married: Married individuals had their loans approved more often than those not married.  Interestingly, all cases where marriage was not recorded had loans approved, however, there were only three observations where marriage was not recorded, and this is likely not significant.
+
+Dependants:  Those with exactly two dependants had their loans approved more often, while those for whom this observation was not recorded had the lowest rate of loan approval.  There is no clear trend concerning the number of dependants and loan approval.
+
+Education: Graduates had a higher rate of loan approval than non graduates.
+
+Self Employed: No difference between those self employed or not; a slightly higher rate for those with missing data under this variable, but this only represents ~5% of cases and is likely not significiant.
+
+Property Area:  Semiurban had a the highest rate of loan approval, followed by Urban, with Rural having the least approvals.
+
+Credit History:  Those whose credit history met guidelines or for whom this variable was not recorded had high rates of loan approval, while those who did not meet guidelines had very low approval.  This is the most significant of the dependant variables.
+
+This gives us a good overview of how the discrete variables relate to the response.  Below, we'll examine the continuous variables and their relationthip to the response.
+
+
+
+```{r, fig.width=10, fig.height=10}
+par(mfrow = c(2,2))
+
+boxplot(df$LoanAmount ~ df$Loan_Status,
+        xlab = "Loan Status", ylab = "Loan Amount (Thousand Dollars)", main = "Loan Amount vs Loan Status")
+
+boxplot(df$Loan_Amount_Term ~ df$Loan_Status,
+        xlab = "Loan Status", ylab = "Loan Term (Months)", main = "Loan Term vs Loan Status")
+
+boxplot(df$ApplicantIncome ~ df$Loan_Status,
+        xlab = "Loan Status", ylab = "Applicant Income", main = "Applicant Income vs Loan Status")
+
+boxplot(df$CoapplicantIncome ~ df$Loan_Status,
+        xlab = "Loan Status", ylab = "Coapplicant Income", main = "Coapplicant Income vs Loan Status")
+```
+
+Above are boxplots of the continuous variables by the response variable (Loan Status).  It should be noted that most of the data (68.7%) will fall under Loan Status = Y.  That being said, we can make a few observations.
+
+Loan Amount: The distributions are similar, but the upper quartile is somewhat lower amongst those who got their loans.  This could indicate a slight preference for those who kept their loans lower.
+
+Loan Term:  No difference between the two classes.  The overwhelming majority of applicants applied for 360 month (30 year) loans; anything else was considered outlier.
+
+Applicant Income vs Loan Status:  It seems like the distributions are fairly similar.  There might be more high-end outliers for those who got their loans approved, but this could also be due to the imbalanced response.
+
+Coapplicant Income:  The median coapplicant income for those who had their application denied was 0, which differs signifcantly from those who had their loan approved.  This could indicate a preference for those who have coapplicants with an income, and could explain why married applicants had a higher approval rate.  It should be noted however that there was no missing data for coapplicant income, and no distinction made between those without coapplicants and those whose coapplicants truly had 0 income.
+
+Let's now see where correlations among all variables lie.
+
+
+
+```{r, fig.height = 12, fig.width = 12}
+
+#Plots correlations.  Model matrix will help this work with categorical data (basically makes categorical into dummy variables)
+plot_correlation(model.matrix(~.,na.omit(df)), type="a")
+
+```
+
+Above is a correlation plot between all variables.  Categorical variables were transformed into dummy variables, which excluded the first category.  Most correlations are mild at best, with a few exceptions (outside of same-variable classes).  Loan Amount is significantly correlated (coef = 0.5) with Applicant Income; perhaps people apply for what they think they can pay for, or need larger loans for houses in areas with higher income.  Loan Status is also significantly correlated with Credit History (coef = 0.53).  This indicates that the creditors are more likely to approve of those who meet their credit history guidelines, which makes alot of sense, and can be used to predict the response variable.
+
+
+Let's now take a look at the distributions of the continuous variables, sans Loan Term (which is almost always 360 months).
+
+```{r, fig.height = 10}
+par(mfrow = c(3,1))
+hist(df$ApplicantIncome, breaks = 100)
+hist(df$CoapplicantIncome, breaks = 100)
+hist(df$LoanAmount, breaks = 50)
+```
+
+Both Aplicant Income and Coapplicant Income are right skewed, while Loan Amount is more normal.  There are also outliers clearly present in all three variables.  Coapplicant Income is also heavily zero inflated, an it may be worth adding another discrete variable to describe zeros here.  It may also be worth doing a log transformation on the Applicant Income variable so it more closely approximates a normal distribution.
+
+Let's take a look at distributions for these variables against the target variable.
+
+```{r}
+
+
+df %>% ggplot(aes(LoanAmount, col=Loan_Status)) + geom_density()
+df %>% ggplot(aes(ApplicantIncome, col=Loan_Status)) + geom_density()
+df %>% ggplot(aes(CoapplicantIncome, col=Loan_Status)) + geom_density()
+df %>% ggplot(aes(Loan_Amount_Term, col=Loan_Status)) + geom_density()
+```
+
+There are a few differenes for the continuous variable distributions when it comes to loan status.  Density tends to be a bit more spread out amongst those whose loans were not granted loans.  It's Unclear if there is enough difference to affect modeling.
+
+## PreProcessing
+
+
+### Feature Engineering and Transformations
+
+Here some features and data transformations are performed.  Steps that were taken and the reasoning behind them include (in order):
+
+Separates off a dataset specifically for LDA.
+
+Made a variable to indate whether or not there were dependants for the LDA dataset.  The 'Dependants' variable is multiclass.  While it is slightly predictive of the target, multiclass variables are incompatable with LDA.  Thus, this new variable "DEPENDENTS" was created as a binary variable (has or does not have dependents), which can be used with LDA.
+
+Made 'missing' categories the Married, Self Emploted, and Gender variables as missing data was predictive of the target variable; this was only done on the general dataset, as this will be incompatable with LDA.  These missing variables themselves were somewhat predictive of the target variable, and it was desireable to retain that information istead of imuting those values
+
+*The next steps are applied to both datasets:*
+
+Made a variable to indicate whether or not Coapplicant Income was zero.  Zero was a very common value for this variable, and itsef proved to be slightly predictive of the target variable.  
+
+Imputed the remaining missing values using predictive mean matching.  For the generic dataset, these missing values themselves were not predictive of the target variable.  Instead, it was deemed better to complete the missing cases by imputing them as existing classes rather than making new 'missing' classes (for discrete variables.)  For the LDA dataset, we cannot use more than two classses per variable, and thus need to impute these to one of their two existing classes.
+
+Centered and scaled continuous data.  Generally reccomended approach for modeling continuous data.
+
+Removed Applicant Income and Loan Term.  They were not predictive of the target, and decreased performance on some models.
+
+```{r}
+#Seperates off a dataset specificly for LDA
+forLDA <- df 
+
+#Makes a new categorical variable which indicates whether or there are dependants.  replaced the old variable
+forLDA$DEPENDENTS <- factor(lapply(forLDA$Dependents, 
+                          function(x) {ifelse(x!=0, "Yes", "No")}),
+                   levels = c("Yes", "No"))
+forLDA$Dependents <- NULL
+
+#Make "missing" categories from NA data where appropriate
+df$Gender = factor(df$Gender, levels=c(levels(df$Gender), "Missing"))
+df$Gender[is.na(df$Gender)] = "Missing"
+
+df$Married = factor(df$Married, levels=c(levels(df$Married), "Missing"))
+df$Married[is.na(df$Married)] = "Missing"
+
+df$Self_Employed = factor(df$Self_Employed, levels=c(levels(df$Self_Employed), "Missing"))
+df$Self_Employed[is.na(df$Self_Employed)] = "Missing"
+  
+  
+#Wraps the next
+process <- function(df) {
+  
+  
+  
+  #Makes a new categorical variable which indicates whether or not Coapplicant Income is 0 or not
+  df$Coap0 <- factor(lapply(df$CoapplicantIncome, 
+                            function(x) {ifelse(x==0, "zero", "positive")}),
+                     levels = c("zero", "positive"))
+  
+  
+                     
+  #Imputes remaining missing values            
+  impute_temp <- mice(df,
+                  m = 5,
+                  method = "pmm",
+                  maxit = 5,
+                  seed = 2021,
+                  )
+  
+  imputed <- complete(impute_temp)
+  
+  
+  
+  
+  
+  #Centers and scales the data where appropriate
+  process <- preProcess(x = imputed,
+                       method = c("center", "scale"))
+  
+  processed <- predict(process, imputed)
+  
+  
+  #Removes variables that aren't significanly correlated to the target
+  #I tested the models with and without these, and accuracy either increased or stayed the same when these were removed
+  processed$Loan_Amount_Term <- NULL
+  processed$ApplicantIncome <- NULL
+
+  return(processed)
+}
+
+forLDA <- process(forLDA)
+
+processed <- process(df)
+
+
+```
+
+
+
+### Train/Test Split
+
+It is desireable to have a holdout dataset to evaluate the models.  Below, 20% of the dataset is split off into a test set, while the remaining 80% becomes the training set (the models are trained on this).  This is done for both datasets
+
+```{r}
+set.seed(2021)
+trainIndex <- createDataPartition(processed$Loan_Status, p = .8) %>% unlist()
+training <- processed[ trainIndex,]
+testing  <- processed[-trainIndex,]
+
+LDAtrainIndex <- createDataPartition(forLDA$Loan_Status, p = .8) %>% unlist()
+LDAtraining <- forLDA[ trainIndex,]
+LDAtesting  <- forLDA[-trainIndex,]
+
+
+```
+
+### Cross Validation Setup
+
+This will be used to add crossvalidation the models.
+```{r}
+# 10 fold cv
+ctrl <- trainControl(method="repeatedcv",
+                     number=10)
+              
+
+                     
+```
+
+
+## Build Models
+
+### LDA
+
+Below, Linear Discriminate Analysis (LDA) is used to attempt to predict the target class (Loan Status).  Variables were selected primarily by their correlation to the target.  Many transformations were performed, the reasons for which are explained in the PreProcessing section. Specific to this model however, the 'Dependants' variable was excluded because it is multiclass, and therefore incompatable with LDA.  It was replaced with the binary "DEPENDENTS' variable.  Missing data from more variables was imputed instead of using a 'missing' class for the same reason.  There were no hyper-parameters to tune here.
+
+```{r}
+#Will probably work with binary classes
+#Caret appears to be removing non-binary discrete classes automatically
+
+
+
+lda.fit <- train(Loan_Status ~ ., data=LDAtraining, 
+                 method="lda",
+                 metric="Accuracy",
+                 trControl=ctrl)
+
+lda.predict <- predict(lda.fit, LDAtesting)
+
+confusionMatrix(lda.predict, LDAtesting$Loan_Status)
+
+#lda.fit$finalModel
+```
+
+### KNN
+
+Below a KNN model is created.  The data preparation is thouroughly explained in the PreProcessing section, but to summarize, 'missing' classes were made for some variables, further missing data was imputed, non-predictive variables were removed (which signifcally improved the accuracy of this model specifically), and continuous variables were centered and scaled.
+
+The only hyper-parameter tuned here was K: the number of nearest neighbors taken into consideration. Grid search was used to find the best value of k, which was 12.
+
+```{r}
+set.seed(2021) #Otherwise it's somthing different each time
+
+tune = expand.grid(.k = 1:35)
+
+
+knn.fit <- train(Loan_Status ~ ., data=training, 
+                 method="knn",
+                 metric="Accuracy",
+                 tuneGrid=tune,
+                 trControl=ctrl)
+
+knn.predict <- predict(knn.fit, testing)
+plot(knn.fit)
+confusionMatrix(knn.predict, testing$Loan_Status)
+
+# knnFit$pred <- merge(knnFit$pred, knnFit$bestTune)
+# knnRoc <- roc(response = knnFit$pred$obs,
+#               predictor=knnFit$pred$successful,
+#               levels= rev(levels(knnFit$pred$obs)))
+# 
+# plot(knnRoc, legacy.axes=T)
+```
+
+### Decision Tree
+
+Here a single decision tree was created.  The data used here was the same as used with the KNN model.  The only hyper-parameter to tune here was the complexity parameter; this basically controls the size of the tree.  It was determined via grid search that any complexity parameter between 0.02 and 0.4 performed equally well.
+
+```{r}
+
+set.seed(2021)
+
+grid = expand.grid(.cp = seq(0,0.5,0.01))
+tree.fit <- train(Loan_Status ~ ., data=training, 
+                  method="rpart",
+                  metric="Accuracy",
+                  preProc=c("center","scale"),  
+                  tuneGrid = grid,
+                  trControl=ctrl)
+
+
+tree.predict <- predict(tree.fit, testing)
+plot(tree.fit)
+confusionMatrix(tree.predict, testing$Loan_Status)
+```
+
+### Random Forest
+
+Below a random forest model is created.  The dataset used here is the same as was used for the KNN and single decision tree models.  The only hyper-parameter here was mtry: the number of randomly selected predictors.  This was chosen via grid-search; two performed the best.  It should be noted that caret will use 500 trees automatically with this function; it does not consider this parameter worth tuning as 500 should approach the maximum performance amongst all possible numbers of trees.
+
+```{r}
+
+grid = expand.grid(.mtry = 10:20)
+
+rf.fit <- train(Loan_Status ~ ., data=training, 
+                method="rf",
+                metric="Accuracy",
+                tuneGrid = grid,
+                trControl=ctrl)
+
+rf.predict <- predict(rf.fit, testing)
+plot(rf.fit)
+confusionMatrix(rf.predict, testing$Loan_Status)
+rf.fit$finalModel
+
+```
+
+## Compare Results
+based on accuracy metrics, ROC curves
+varaible importance to model
+interpretability?
+```{r}
+results <- resamples(list(lda=lda.fit,knn=knn.fit,tree=tree.fit,rf=rf.fit))
+summary(results)
+dotplot(results)
+
+varImp(lda.fit)
+varImp(knn.fit)
+varImp(tree.fit)
+varImp(rf.fit)
+```
