@@ -1,15 +1,17 @@
 ---
 title: "DATA622 HW3"
-author: "Section 2, Group 2: Robert Welk & David Blumenstiel"
+author: 'Section 2, Group 2: Robert Welk & David Blumenstiel'
 date: "10/24/2021"
 output:
   html_document:
     code_folding: hide
-    toc: true
     theme: cerulean
+    toc: yes
     toc_float:
-      collapsed: true
-      smooth_scroll: true
+      collapsed: yes
+      smooth_scroll: yes
+  pdf_document:
+    toc: yes
 ---
 
 ```{r setup, include=FALSE}
@@ -379,7 +381,7 @@ Below a random forest model is created.  The dataset used here is the same as wa
 
 
 ```{r}
-
+set.seed(2021)
 grid = expand.grid(.mtry = 0:20)
 
 rf.fit <- train(Loan_Status ~ ., data=training, 
