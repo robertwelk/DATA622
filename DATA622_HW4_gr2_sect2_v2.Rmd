@@ -1,0 +1,975 @@
+---
+title: "DATA 622 HW3"
+author: "Robert Welk"
+date: "10/30/2021"
+output:
+  html_document:
+    code_folding: hide
+    theme: cerulean
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Purpose
+
+*For this assignment, we will be working with a very interesting mental health dataset from a real-life research project. All identifying information, of course, has been removed. The attached spreadsheet has the data (the tab name “Data”). The data dictionary is given in the second tab. You can get as creative as you want. The assignment is designed to really get you to think about how you could use different methods.* 
+
+Packages used: 
+
+```{r warning=F, message = F}
+library(DataExplorer)
+library(tidyverse)
+library(corrplot)
+library(scales)
+library(mice)
+library(caret)
+library(GGally)
+library(viridis)
+library(plotly)
+library(ggdendro)
+library(ggpubr)
+library(cluster)
+```
+
+
+The provided mental health dataset was uploaded to GitHub for ease of access and reproducability.  First, it is imported into a dataframe.
+
+```{r}
+df <- read.csv("https://raw.githubusercontent.com/robertwelk/DATA622/main/ADHD_data.csv", na.string="") # %>% as_tibble()
+colnames(df)[1] <- "Initial" 
+```
+
+
+# Exploratory Data Analysis 
+
+*Conduct a thorough Exploratory Data Analysis (EDA) to understand the dataset. (20 points)*
+
+## Data Overview
+
+There are 54 variables in the raw dataset.
+
+**Data Dictionary**
+
+Sex:  Male-1, Female-2
+
+Race:  White-1, African American-2, Hispanic-3, Asian-4, Native American-5, Other or missing data -6
+
+ADHD self-report scale (multiple variables): Never-0, rarely-1, sometimes-2, often-3, very often-4
+
+Mood disorder questions(multiple variables): No-0, yes-1; question 3: no problem-0, minor-1, moderate-2, serious-3
+
+Individual substances misuse(multiple variables):  no use-0, use-1, abuse-2, dependence-3
+
+Court Order:  No-0, Yes-1
+
+Education: 1-12 grade, 13+ college
+
+History of Violence: No-0, Yes-1
+
+Disorderly Conduct: No-0, Yes-1
+
+Suicide attempt: No-0, Yes-1
+
+Abuse Hx: No-0, Physical (P)-1, Sexual (S)-2, Emotional (E)-3, P&S-4, P&E-5, S&E-6, P&S&E-7
+
+Non-substance-related Dx: 0 – none; 1 – one; 2 – More than one
+
+Substance-related Dx: 0 – none; 1 – one Substance-related; 2 – two; 3 – three or more
+
+Psychiatric Meds: 0 – none; 1 – one psychotropic med; 2 – more than one psychotropic med
+
+
+
+Below are a couple basic plots of the dataset as a whole.
+
+
+```{r, fig.width=10, fig.height=5}
+# names 
+str(df)
+
+# missing values
+plot_missing(df) 
+```
+
+Above is a quick breakdown of the different variables.  Except for the Initial variable (which will be removed prior to modeling), every variable is an integer (continuous).  This doesn't make too much sense for many of these variables, suck as the ADHD and MD self report questions.  While such variables often progress in the same direction (1<2<3), there is no real scale; these variables would be better described as categorical.
+
+When it comes to missing data, most variables are completely intact, while only one variable (Psych Meds) is missing a significant amount (67%).  Missing data will later be imputed.
+
+
+
+## 1. Demographics
+
+Below is an basic exploration of some demographic information: Age, Sex, Race, and Education.
+
+```{r warning=F}
+#table(df$Sex)
+# variables that can be categorized as demographics
+demographics <- c('Age', 'Race', 'Sex', 'Education')
+
+# summary of demographics
+df %>% dplyr::select(all_of(demographics)) %>%  summary() 
+#df %>% dplyr::select(all_of(demographics)) %>%  str
+
+# plot counts 
+# p1 <- df %>% 
+#   ggplot(aes(x=factor(Race))) + 
+#     geom_bar(aes(y = (..count..)/sum(..count..))) + 
+#     scale_y_continuous(labels = percent) +
+#     geom_text(aes(y = ((..count..)/sum(..count..)), label = scales::percent((..count..)/sum(..count..))), stat = "count", vjust = -0.25) +
+#     scale_y_continuous(labels = percent) +
+#     theme_minimal() 
+#  
+
+
+# get counts of each group 
+df %>% 
+  dplyr::select(all_of(demographics), Initial) %>% 
+  pivot_longer(-Initial) %>% 
+  ggplot(aes(x=value)) + 
+  geom_bar(stat="count") + 
+  facet_wrap(~name, scales="free") + 
+  theme_minimal()
+
+
+
+
+# Replace 2 (female) to 0 so that range is from 0 to 1
+df$Sex[df$Sex==2] <- 0
+
+```
+
+*Age, Sex, Race, and Education*
+
+- Ages range from 18 to 69 with a median of 42.  This is older than the median age of the US population, 38 years, likely because this dataset excludes children (<18 years).
+- 12 years of education, completed highschool, is the most common level of educational attainment. More participants had not completed high school than had a college education. Education levels ranged from 6 years to 19 years.
+- African Americans were the most common ethnic group (100) followed by White (72). Other ethnic groups had only a few participants (3)
+- There were more males (99) than females (76) in this dataset.
+
+
+
+## 2. ADHD self-report
+
+Below is a correlation plot concerning the ADHD self-report question variables.  This will interperet the questions not as categorical variables, but as continuous ones.  Thus, this is more of an exploration into the directions by which the variables are correlated; the shown scale of the correlations should be taken with a grain of salt.
+
+```{r}
+# correlation 
+na.omit(df) %>% 
+  select(starts_with('ADHD')) %>% 
+  cor () %>%  
+  corrplot(method='color', diag=F, type='lower')
+```
+
+- Most individual ADHD variables are somewhat positvely correlated to one-another, with none being negatively correlated.  
+- The ADHD Total variable is highly correlated to most of the questions.  This variable is could likely be used as a proxy for the other questions (dimensionality reduction)
+
+Below is a density plot of the ADHD Total variable; the cumulative score of all other ADHD variables for each individual.
+
+```{r}
+df %>% ggplot(aes(ADHD.Total)) + geom_density() 
+
+
+```
+
+- The distribution of ADHD Total is somewhat gaussian (if perhaps a little right skewed), with a mean of 34.3 and a standard deviation of 16.7.
+- This variable will likely be valueable for representing relative ADHD severity
+
+
+## 3. Mood Disorder self-report
+
+
+Below is a correlation plot concerning the mood disorder (MD) self-report question variables.  Simiarly to the ADHD plots, this will interperet the questions not as categorical variables, but as continuous ones. 
+
+
+```{r}
+# MD.TOTAL captures most of the information of the individual questions
+na.omit(df) %>% 
+  select(starts_with('MD')) %>% 
+  cor () %>%  
+  corrplot(method='color', diag=F, type='lower')
+```
+
+- Similarly to the ADHD variables, the MD variables are always positively correlated or not correlated.
+-The MD Total variable is highly correlated to the other MD variables, and would make a good proxy for them.
+
+Below is a density plot of the MD Total variable; the cumulative score of all other MD variables for each individual.
+
+```{r}
+# find the distribution of score
+df %>% ggplot(aes(MD.TOTAL))+geom_density(col="black", alpha=.5)
+
+```
+
+- The MD Total variable is fairly left skewed, with individuals on the whole tending to report highly on the MD questions.  
+- This variable has a median of 11, and an IQR of 7.5.
+
+## 4. Drug Use
+
+Below is a plot of the 6 substance useage questions.  Each substance is represented by a bar proportioned by how individuals use the substance.
+
+*Substance Usage*
+
+no use-0, use-1, abuse-2, dependence-3
+
+```{r}
+# Specific drugs by Race and Sex
+na.omit(df[,40:45]) %>% 
+  dplyr::select(Alcohol, THC,Cocaine,Stimulants, Sedative.hypnotics,Opioids) %>% 
+  pivot_longer(everything()) %>% 
+  ggplot(aes(x=name,fill=as.factor(value))) + 
+  geom_bar(position = "fill") + 
+  scale_fill_viridis_d() + 
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent) 
+
+
+
+```
+
+```{r, messge=F, warning=F, include=F}
+q <- na.omit(df[,40:45])
+
+
+q$DRUG_abuse <- as.integer(apply(q >= 2, 1, any))  #Drug abusers
+
+q <- sum(q$DRUG_abuse)/length(q$DRUG_abuse)
+
+```
+
+- The most frequest response for all substances was 'no use'
+- Individuals were more likely to report dependence rather than use or abuse
+- Alcohol was the most commonly abused/dependant drug, followed by Cocaine, then THC
+- 76.6% of participants reported either abuse or dependence of one of the categories of drugs.   
+
+
+## 6. Legal Issues
+
+Below are figures pertaining to 'legal issues': court orders, disorderly conduct, and history of violence
+
+```{r warning=F}
+
+df %>% 
+  dplyr::select(Court.order, Disorderly.Conduct, Hx.of.Violence ,Initial) %>% 
+    pivot_longer(-c(Initial)) %>% 
+  group_by(name, value) %>% 
+  summarize(n())
+
+df %>% 
+  dplyr::select(Court.order, Disorderly.Conduct, Hx.of.Violence ,Initial) %>% 
+  pivot_longer(-c(Initial)) %>% 
+    ggplot(aes(x=value)) + 
+  geom_bar(stat="count") + 
+  facet_wrap(~name, scales="free") + 
+  theme_minimal()
+
+
+```
+
+- Disorderly conduct was the most common legal issue with 119 of participants having one
+- There were relatively few court orders (15)
+- 40 had a history of violence
+
+
+## 7. Abuse
+
+Below is a barplot of abuse.  This is a categorical variable with values refferencing different types of abuse.  These values follow as:
+
+No-0, Physical (P)-1, Sexual (S)-2, Emotional (E)-3, P&S-4, P&E-5, S&E-6, P&S&E-7
+
+```{r warning=F}
+table(df$Abuse)
+df %>% 
+  ggplot(aes(Abuse)) + geom_bar(stat="count")
+
+
+```
+
+- Most participants (101) had no history of abuse 
+- Sexual abuse was the second most common, followed by physical and emotional > physical > physical, emotional, and sexual
+
+
+## 8. Medical Interventions
+
+Below, the prevalance of substance and non-substance related diagnosies, along with (perscription) psychotropic medications are explored.
+
+```{r warning=F}
+df %>% 
+  ggplot(aes(Subst.Dx)) + geom_bar(stat="count")
+
+df %>% 
+  ggplot(aes(Non.subst.Dx)) + geom_bar(stat="count")
+df %>% 
+  ggplot(aes(Psych.meds.)) + geom_bar(stat="count")
+
+
+```
+
+- Most participants had a substance diagnosis, many had 2 or more
+- Most participants did not had a non substance diagnosis 
+- Participants were almost as likely to use 0, 1, or more than 1 psychotropic drugs, although the majority of the data is missing for this variable
+
+
+## 9. Suicide
+
+Suicide is the target variable for the the supervised learning section later on.  Below, there are several different figures examining suicide attempts in respect to several different variables:
+
+Below, MD and ADHD Total variables are plotted, along with suicide.
+
+```{r}
+# ADHD and MD
+df %>%
+  filter(!is.na(Suicide)) %>% 
+  ggplot(aes(x=ADHD.Total, y=MD.TOTAL, col=factor(Suicide))) + 
+  geom_point(size=2) + 
+  scale_color_viridis_d()
+
+```
+
+- 49 out of 162 participants (~30%) attempted a suicide 
+- Self-report scores above median are slightly associated with more of suicide attempts
+- There were no attempted suicides for individuals with less than 30 ADHD Total in combination with less than 8 MD Total
+
+Below, suicide is examined in relation to sex, race, and educational attainment
+
+```{r warning=F}
+# Demographics
+df %>%
+  filter(!is.na(Suicide)) %>% 
+  ggplot(aes(x=Age, y=Education, col=factor(Suicide))) + 
+  geom_point(size=2) + 
+  scale_color_viridis_d()
+
+df %>% 
+  filter(!is.na(Suicide)) %>% 
+  ggplot(aes(Race, fill=factor(Suicide))) + 
+  geom_bar(aes(y = (..count..)/sum(..count..))) + 
+  scale_y_continuous(labels = percent) + 
+  geom_text(aes(y = ((..count..)/sum(..count..)), label = scales::percent((..count..)/sum(..count..))), stat = "count", vjust = -0.55) + 
+  scale_fill_viridis_d()
+
+df %>% 
+  filter(!is.na(Suicide)) %>% 
+  ggplot(aes(Sex, fill=factor(Suicide))) + 
+  geom_bar(aes(y = (..count..)/sum(..count..))) + 
+  scale_y_continuous(labels = percent) + 
+  geom_text(aes(y = ((..count..)/sum(..count..)), label = scales::percent((..count..)/sum(..count..))), stat = "count", vjust = -0.55) + 
+  scale_fill_viridis_d()
+
+```
+
+- Whites and females were more likely to commit suicide
+- Those with some college education (> 12 years) were less likely to attempt suicide 
+
+Below, suicide in relation to substance use is examined.
+
+```{r}
+# Drug use 
+df %>% 
+  filter(!is.na(Suicide)) %>% 
+  dplyr::select(Alcohol, THC,Cocaine,Stimulants, Sedative.hypnotics,Opioids,Suicide) %>% 
+  pivot_longer(-c(Suicide)) %>%  
+  ggplot(aes(value, fill=factor(Suicide))) + 
+  geom_bar(position="dodge") + 
+  scale_fill_viridis_d()+
+  facet_wrap(~name, scales="free")
+
+
+
+```
+
+- Suicide tends to be more prevalant with any kind of dependence except cocaine, than for those who do not use.
+- Use and abuse, although less common then dependence, tend to also be associated with more suidide attempts.
+
+Below, suicide in relation to legal issues and violence is examined. 
+
+```{r}
+# Legal issues 
+df %>% filter(!is.na(Suicide)) %>%
+  dplyr::select(Court.order, Hx.of.Violence, Disorderly.Conduct ,Suicide) %>% 
+  pivot_longer(-c(Suicide)) %>%  
+  ggplot(aes(factor(value), fill=factor(Suicide))) + 
+  geom_bar(position="dodge") +
+  scale_fill_viridis_d()+
+  facet_wrap(~name, scales="free")
+```
+
+- Suicide is more prevalant among those with a history of violence, or a court order.
+
+Below, suicide in relation to legal issues and diagnosies and psychotropic perscriptions is examined. 
+
+```{r}
+# medical
+df %>% filter(!is.na(Suicide)) %>%
+  dplyr::select(Non.subst.Dx, Subst.Dx, Psych.meds.,Suicide) %>% 
+  pivot_longer(-c(Suicide)) %>%  
+  ggplot(aes(factor(value), fill=factor(Suicide))) + 
+  geom_bar(position="dodge") + 
+  scale_fill_viridis_d()+
+  facet_wrap(~name, scales="free")
+
+
+
+```
+
+
+- Those with 2 or more substance related diagnosis tend to attempt suicide more
+
+- Those with 1 psychotropic medication are less likely to attempt suicide
+
+
+# Data Preparation and Imputation
+
+## Imputation
+
+First, let's use some pedictive mean matching to impute missing data.
+
+```{r message = F}
+imputed <- complete(impute <- mice(df,
+                                   m = 5,
+                                   method = "pmm",
+                                   maxit = 5,
+                                   seed = 2021,
+                                   printFlag = FALSE))
+```
+
+
+Now that there's no missing data, let's create some new variables to help simplifiy dataset, and reduce multiclass variables to binary ones so some of the algorythms work better.
+
+The new variables will include:
+
+- Higshchool completion
+- Age over 40
+- Having been abused
+- Using any drug
+- Abusing any drug
+- Dependant on any drug
+- Being of white race
+- Having legal issues (violence, court order, disorerly conduct)
+- Having over a median ADHD Total score
+- Having over a median MD Total score
+- Having more than one substance related diagnosies
+- Having more than one psychotropic medication
+
+```{r}
+processed <- imputed
+
+# Completed highschool
+processed$EDUCATION <- ifelse(imputed$Education > 12, 1,0)
+
+
+# Age over 40
+processed$AGE_lt40 <- ifelse(imputed$Age < 40,1,0)
+
+
+# Have been abused
+processed$ABUSE <- ifelse(imputed$Abuse > 0, 1,0)
+
+
+#Drug use
+#Going to be some colinearity here.  Use these together with caution
+subs = processed[,c("Alcohol", "THC", "Cocaine", "Stimulants", "Sedative.hypnotics", "Opioids")]
+
+processed$DRUG_abuse <- as.integer(apply(subs >= 2, 1, any))  #Drug abusers
+
+processed$DRUG_dependence <- as.integer(apply(subs >= 3, 1, any)) #Drug dependants
+
+processed$DRUGS <- as.integer(apply(subs >= 1, 1, any)) #Drug users
+
+#Changes race data to white/not white.  Were only three cases of not white or african american.  0 is white, 1 is not-white
+processed$Race.White <- as.integer(df$Race == 1)
+
+
+
+#Has legal/violence issues
+processed$LEGAL_issues <- ifelse(imputed$Court.order==1 | imputed$Disorderly.Conduct==1 | imputed$Hx.of.Violence==1, 1,0)
+
+#Above Median ADHD Self Reported
+processed$ADHD.gtMEDIAN <- ifelse(imputed$ADHD.Total > median(imputed$ADHD.Total), 1,0)
+
+#Above Median MD Self Reported
+processed$MD.gtMEDIAN <- ifelse(imputed$MD.TOTAL > median(imputed$MD.TOTAL), 1,0)
+
+
+# Medical Intervention
+processed$DX.SUBSgt2 <- ifelse(imputed$Non.subst.Dx %in% c(2,3), 1,0)
+
+
+processed$PYSCHMEDSgt2 <- ifelse(imputed$Psych.meds. == 2, 1,0)
+```
+
+
+Let's visualize these new variables
+
+
+```{r}
+processed %>% 
+  filter(!is.na(Suicide)) %>% 
+  ggplot(aes(ADHD.gtMEDIAN, fill=factor(Suicide))) + 
+  geom_bar(aes(y = (..count..)/sum(..count..))) + 
+  scale_y_continuous(labels = percent) + 
+  geom_text(aes(y = ((..count..)/sum(..count..)), label = scales::percent((..count..)/sum(..count..))), stat = "count", vjust = -0.55) + 
+  scale_fill_viridis_d()
+
+processed %>% 
+  filter(!is.na(Suicide)) %>% 
+  ggplot(aes(MD.gtMEDIAN, fill=factor(Suicide))) + 
+  geom_bar(aes(y = (..count..)/sum(..count..))) + 
+  scale_y_continuous(labels = percent) + 
+  geom_text(aes(y = ((..count..)/sum(..count..)), label = scales::percent((..count..)/sum(..count..))), stat = "count", vjust = -0.55) + 
+  scale_fill_viridis_d()
+
+
+
+
+
+processed %>% 
+  filter(Race %in% c(1,2)) %>% 
+  ggplot(aes(x=factor(LEGAL_issues),fill=factor(Sex))) + 
+    geom_bar(stat="count") + 
+    scale_fill_viridis_d()+
+    facet_wrap(~Race)
+
+
+
+processed %>%   
+  filter(!is.na(Suicide)) %>%  
+  ggplot(aes(ABUSE, fill=factor(Suicide))) + 
+  geom_bar(position="dodge") + 
+  scale_fill_viridis_d()
+
+processed %>% 
+  ggplot(aes(ABUSE, col=Sex)) + geom_bar(stat="count")
+
+
+
+
+```
+
+
+# Unsupervised Learning 
+
+## Clustering 
+
+*Use a clustering method to find clusters of patients here. Whether you choose to use k-means clustering or hierarchical clustering is up to you as long as you reason through your work. You are free to be creative in terms of which variables or some combination of those you want to use. Can you come up with creative names for the profiles you found? (40 points)*
+
+Hierarchical clustering is used to find clusters of individuals represeted in the dataset. This approach is effective at finding groups and is based on a matrix of distances between variables. Hierarchical clustering was determined to have substantial advantages to kmeans clustering: a value for the number of clusters does not have to be chosen, results are more reproducible, and distance based clustering is more appropriate for the binary and multinomial categorical data present in the dataset. Hierarchical clustering can be considered a flexible approach since the level of granularity can be adjusted without rerunning the algorithm, and subclusters can be observed.   
+
+
+### Preprocessing for Clustering 
+
+Processing of the raw dataset was performed to prepare for hierarchical clustering (and future analyses). Based on the EDA performed above, the number of variables of the raw dataset was reduced by combining/selecting variables of the categories identified while retaining as much of the information as possible. Processing of the variables was done in a manner to find groups associated with high suicide rates in the data.  Dimensionality reduction was helpful for obtaining more interpretable results from the clustering algorithm. The binary categorical variables were encoded as numeric. All variables were then centered and scaled. 
+
+
+```{r}
+cluster_df <-  processed %>%
+       dplyr::select(AGE_lt40,
+                     Sex,
+                     Race.White,
+                     EDUCATION,
+                     ADHD.gtMEDIAN,
+                     MD.gtMEDIAN,
+                     Hx.of.Violence,
+                     DRUGS,
+                     ABUSE,
+                     DX.SUBSgt2,
+                     PYSCHMEDSgt2,
+                     Suicide
+                     )
+
+
+# encoding 
+# dummy <- dummyVars(" ~ .", data=cluster_df)
+# cluster_df_dum <- data.frame(predict(dummy, newdata = cluster_df)) 
+
+# remove near-zero variance
+# ind <- nzv(cluster_df_dum)
+# cluster_df_dum <- cluster_df_dum[,-ind]
+
+```
+
+
+### Make clusters
+
+Clustering was done using the `hclust` function. A dissimilarity matrix was calculated on the binary variables using gower distance (provided in `cluser` package), and was used as an input to the algorithm. Gower distance is better suited for binary categorical data than Euclidean or Manhattan distance. Clustering was based on Ward's linkage. The resulting dendrogram shows the relationship of all the data points in the system (x axis) and their associated distances (y axis).  An appropriate cutoff was established based on the dendrogram below which resulted in 3 clusters. The decision to cut the dendrogram was based on the large distance between the three main branches. Clustering into 3 groups gave enough granularity for purposes of identifying subgroups from the data, and is useful in identifying variables associated with suicide. The clusters assigned at each observation were merged dataframe and will be used as a predictor in the classification problems in the next section. 
+
+REF: https://www.statmethods.net/advstats/cluster.html
+
+- 
+```{r warning=F}
+set.seed("1234567890")
+
+# distances <- dist(df_clust_raw_scaled)
+distances <- daisy(cluster_df, metric = c("gower"))
+
+# using hclust
+hclust <- hclust(distances, method="ward.D")
+ggdendrogram(as.dendrogram(hclust)) + geom_hline(yintercept = 4.5, col="red")
+
+# assign labels to initial data\
+cluster_df$cluster <- cutree(hclust, 3)
+
+```
+
+
+### Analysis of Clusters 
+
+The results of hierarchical clustering were evaluated by aggregating the cluster label and variables and taking the mean value of each group. The means of each group were used to determine defining characteristics of each the clusters. A summary is provided:
+
+Cluster3: Least likely to attempt suicide. High rates of being on 2 or more pyschotropic meds. Most likely to abuse drugs
+Cluster2: College educated, most likely to self report mood disorder and ADHD,  
+Cluster1: Highest suicide, History of abuse, did not attend college, generally female, somewhat more likely to have a violent history. Has two or more substance diagnosis 
+
+```{r warning=F}
+#cluster_df <- update_columns(cluster_df, c(""))
+table <- cluster_df %>%
+  pivot_longer(-c(cluster)) %>%
+  group_by(cluster, name) %>%
+  summarize(mean =mean(na.omit(value))) %>% 
+  arrange(name)
+
+# plot
+table %>%
+  ggplot(aes(y=mean,  x=cluster)) + 
+  geom_bar(stat="identity", position='dodge') + 
+  facet_wrap(~name, scales="free")
+
+```
+
+## PCA
+
+*Let’s try exploring this dataset using Principal Component Analysis on this dataset. You will note that there are different types of questions in the dataset: column: E-W: ADHD self-report; column X – AM: mood disorders questionnaire, column AN-AS: Individual Substance Misuse; etc. You could just use ONE of the sets of questionnaire, for example, you can conduct PCA on the ADHD score, or mood disorder score, etc. Please reason through your work as you decide on which sets of variables you want to use to conduct Principal Component Analysis. What did you learn from the PCA? Can you comment on which question may have a heavy bearing on the score? (40 points)*
+
+
+Principal Component Analysis is a popular dimensionality reduction technique, where each principal component is a linear combination of the origional variables.  Ideally, one or a few variables will account for most of the variance in the data, allowing us to analyze the data in a lower dimension form.  Below, PCA is implimented to hopefully reduce the data to a couple principal components.
+
+PCA is generally regaurded as not appropriate for analyzing categorical data (which is a major part of this dataset).  However, it should work well enough for binary data.  Therefore, we will only use continuous and binary data in this PCA; in preparation, several multiclass categorical variables were altered into binary variables.  The dataset also comes with a couple variables (ADHD Total and MD Total) which capture the essence of many categorical variables in single continuous variables.
+
+
+
+```{r}
+pca_vars <- c("Age","Sex","Race.White","ADHD.Total","MD.TOTAL","DRUG_abuse","DRUG_dependence","DRUGS","Court.order","Education","Hx.of.Violence","Disorderly.Conduct","Suicide","ABUSE","Non.subst.Dx","Psych.meds.", "DX.SUBSgt2", "PYSCHMEDSgt2")
+
+
+pca_df <- processed[pca_vars]
+
+
+pca <- prcomp(pca_df, scale = TRUE)  #Do PCA with scaling
+
+q <- data.frame(summary(pca)$importance[2,]) #for the importances barplot
+
+
+ggplot(data = q, aes(y = q[,1], x = reorder(row.names(q), -q[,1]))) + #Plots component importance
+  geom_bar(stat = "identity", fill = "blue") +
+  scale_y_continuous(limits = c(0,1)) +
+  labs(title = "Principal Component Importances", y = "Proportion of Explained Variance", x = "Principal Component")
+  
+summary(pca)
+```
+
+Above is a summary of each of the principal components (PCs) in this analysis.  There are 18 PCs in total (one for each variable).  These PCs are only weakly representative of the data individually.  The first four cumulatively account for 55% of the variability within the data.  The first PC, which explains the most, accounts for 21.5% of the variability, while PC2 accounts for 15.1%
+
+Let's see what the first four PCs are comprised of.
+
+
+```{r}
+#Took some code ad inspiration from:
+#https://www.youtube.com/watch?v=0Jp4gsfOLMs
+
+num_comps = 4
+
+for(comp in seq(1,num_comps)) {
+
+  #Below will return the main constituants of a principal component, and their contributions
+  loading <- pca$rotation[,comp] #oing principal component 1
+ 
+  ranked.scores <- sort(abs(loading), decreasing = TRUE)
+  
+  print(paste("Principal Component", comp))
+  print(round(loading[names(head(ranked.scores))],3))
+
+}
+
+```
+
+These PCs tend to have their correlations spread out amongst several variables; no one variable really takes prescidence in any of these.  That being said, we can still describe these PCs in terms of the main variables they are comprised of.  PC1 for instance is primarily comprosed of drug use and substance diagnosis variables, where the drug use variables are negatively correlated and the substance diagnosis ones are positively correlated.  PC2 is mostly comprised of psychological variables, and is highly correlated to psychotropic perscriptions, mood disorders, and somewhat to ADHD.  PC3 is positively correlated to being abused abd suicide, while negatively correlated to psych meds.  PC4 is highly negatively correlated to violence and disorderly conduct and male sex.
+
+The patterns are interesting, although there is definately some colinearity between the variables within each PC (but not between PCs).  That being said, we could try to label the first four PCs as:
+
+PC1: Drug abuse and substance diagnoses
+
+PC2: Mental disorders
+
+PC3: Abuse, Suicide, and psychotropic medications
+
+PC4: Violent men.
+
+
+# Supervised Learning
+
+For this section, two types of classifier will be considered: Support Vector Machines and Stochastic Gradient Boosting
+
+
+
+## Gradient Boosting
+
+*Assume you are modeling whether a patient attempted suicide (column AX). This is a binary target variable. Please use Gradient Boosting to predict whether a patient attempts suicides. Please use whatever boosting approach you deem appropriate. But please be sure to walk us through your steps. (50 points)*
+
+Based on the EDA performed above, variables informative of suicide incidence were selected.  Based on hierarchical clustering variables associated with clusters *** and *** were identified.
+
+Categorical varaibles were encoded as numeric. 
+
+
+### GBM pre-processing
+ 
+```{r}
+# select variables to use for boosted model
+# df_boost <- df %>%
+#   dplyr::select(Age,Race,Education,Sex,ADHD.Total,MD.TOTAL, LEGAL_issues,Suicide,DRUGS, DX,  ABUSE, Hx.of.Violence)
+# df_boost$cluster <- cutree(hclust, 3)
+
+df_boost <- processed %>% dplyr::select(ABUSE, ADHD.Total,MD.TOTAL, DRUG_dependence, EDUCATION, DX.SUBSgt2, PYSCHMEDSgt2, Race, Sex, Suicide, AGE_lt40,LEGAL_issues)
+df_boost$cluster1 <- ifelse(cutree(hclust, 3)==1,1,0)
+
+#names(df_boost)
+# change variable types if needs
+df_boost <- update_columns(df_boost, c("Race","Sex", "DX.SUBSgt2","DRUG_dependence" , "ABUSE","cluster1","PYSCHMEDSgt2","EDUCATION", "AGE_lt40", "LEGAL_issues"), as.factor)
+
+# one-hot encoding
+dummy <- dummyVars(" ~ .", data=df_boost)
+df_boost <- data.frame(predict(dummy, newdata = df_boost))
+
+# remove near-zero variance
+ind <- nzv(df_boost)
+df_boost <- df_boost[,-ind]
+
+
+#plot_missing(df_boost)
+# 
+#df_boost <- cluster_df_dum 
+# # change target data type
+df_boost$Suicide <- factor(df_boost$Suicide, levels=c(1,0))
+
+ 
+# # remove obs where Suicide is NA
+#df_boost <- df_boost %>% filter(complete.cases(.))
+
+
+```
+
+### Splitting & Cross-validation
+
+It is desirable to have a holdout dataset to evaluate the models.  Below, 20% of the dataset is split off into a test set, while the remaining 80% becomes the training set (the models are trained on this).  This is done for both datasets.
+
+Ten-fold cross validation is used as an aid in model training; this is seperate from the holdout testing set, which will be used solely for model evaluation at the end of training.
+
+
+```{r}
+set.seed(1)
+trainIndex <- createDataPartition(df_boost$Suicide, p = .85) %>% unlist()
+training <- df_boost[ trainIndex,]
+testing  <- df_boost[-trainIndex,]
+
+# 10 fold cv
+ctrl <- trainControl(method="repeatedcv",
+                     number=10,)
+
+
+```
+
+### Build GBM model 
+The stochastic gradient boosted model has 4 hyperparameters that will be tuned using cross validation:
+1. n.trees: number of trees
+2. interaction.depth: the depth of the trees at each iteration. Larger interaction depth means more varaibles are used.
+3. shrinkage: the learning rate. High values mean a faster learner.
+4. n.minosinnode:
+
+best model
+Tuning parameter 'n.minobsinnode' was held constant at a value of 1
+Accuracy was used to select the optimal model using the largest value.
+The final values used for the model were n.trees = 1500, interaction.depth = 4, shrinkage = 0.001
+ and n.minobsinnode = 1. USed # load the saved testing/training sets
+testing <- readRDS('testing1.rds')  
+training <- readRDS('training1.rds')
+mod <- readRDS('gbm.mod1.rds')
+
+```{r}
+# load the saved testing/training sets
+# testing <- readRDS('testing1.rds')  
+# training <- readRDS('training1.rds')
+# mod <- readRDS('gbm.mod1.rds')
+
+# hyperparamer grid
+set.seed(1)
+# Accuracy: 76%
+# grid = expand.grid(.n.trees = seq(10, 200, by=10),
+#                    .interaction.depth=seq(2,16,2),
+#                    .shrinkage=c(0.01,0.1),
+#                    .n.minobsinnode=c(1))
+# 83% accuracy on test set 
+grid = expand.grid(.n.trees = seq(50,11100 , by=5000),
+                   .interaction.depth=seq(2,20,by=6),
+                   .shrinkage=c(0.005, .01),
+                   .n.minobsinnode=c(1))
+
+gbm.mod2 <- train(Suicide ~ ., data=training, 
+                  method="gbm",
+                  distribution="bernoulli",
+                  #preProc=c("center","scale"),  
+                  tuneGrid = grid,
+                  trControl=ctrl,
+                  verbose=F)
+
+   # saveRDS(testing, 'testing2.rds')
+# saveRDS(training, 'training2.rds')
+# saveRDS(gbm.mod2, 'gbm.mod2.rds')
+
+
+gbm.mod2$results
+```
+
+### Evaluate gbm
+```{r warning=F}
+gbm.predict <- predict(gbm.mod2, newdata = testing %>% dplyr::select(-Suicide))
+gbm.mod2$finalModel
+plot(gbm.mod2)
+confusionMatrix(gbm.predict, testing$Suicide)
+
+gbm.mod2
+gbm.predict <- predict(gbm.mod2, newdata = testing %>% dplyr::select(-Suicide))
+gbm.mod2$finalModel
+plot(gbm.mod2)
+ggsave('mod1_cv.jpeg')
+confusionMatrix(gbm.predict, testing$Suicide)
+
+#predict(gbm.mod2, type="response")
+
+```
+
+##  Support Vector Machine
+
+*Using the same target variable (suicide attempt), please use support vector machine to model this. You might want to consider reducing the number of variables or somehow use extracted information from the variables. This can be a really fun modeling task! (50 points)*
+
+
+
+SVMs are fairly robust.  The data doesn't need to be linear, but multiclass independent variables won't work that well.  We'll use some of our pre-distilled variables here so we can avoid that issue without dramatically increasing the number of classes via dummy encoding (which was breifly attempted with no success).  Below, the data is processed and split into training and testing sets (80/20%).
+
+```{r}
+set.seed("1234567890")
+
+
+svm_vars = c("Age","Sex","Race.White","ADHD.Total","MD.TOTAL","DRUG_abuse","DRUG_dependence","DRUGS","Court.order","Education","Hx.of.Violence","Disorderly.Conduct","Suicide","ABUSE","Non.subst.Dx","Psych.meds.", "DX.SUBSgt2", "PYSCHMEDSgt2")
+
+
+#select the variables
+svm_df <- processed[svm_vars]
+
+#Change suicide to factor
+svm_df$Suicide <- as.factor(svm_df$Suicide)
+
+#Train test split
+splitdex <- createDataPartition(svm_df$Suicide, p = 0.8, list = FALSE)
+train <- svm_df[splitdex,]
+test <- svm_df[-splitdex,]
+```
+
+There are many variations of support vector machines; we'll try a few of them.  Below, one with a linear kernel is used.  The only hyper-parameter to tune here is cost, which is essentially the margins by which support vectors are selected.  Low cost means smoother decision surfaces, while high cost tends to select more support vectors.  'Linear' here basically means it won't use a kernel trick to map data to a higher dimension.
+
+```{r}
+set.seed("1234567890")
+
+grid = expand.grid(cost = seq(1,10, length.out = 20)^2)
+svm.linear.fit <- train(Suicide ~., 
+                 data = train,
+                 method = "svmLinear2",             #SVM with linear kernel from the e1071 package
+                 preProcess = c("center","scale"),
+                 tuneGrid = grid)
+
+
+svm.linear.fit
+
+svm.linear.predictions <- predict(svm.linear.fit, test)
+
+
+confusionMatrix(svm.linear.predictions, test$Suicide, positive = "1")
+
+
+```
+
+Above is the breakdown of the model, and it's performance on a holdout set.  A cost value of about 15 was chosen.  This produces a mix of false/true positves/negatives, with an outsized amount of false negatives.  Unfortunately, it's prediction accuracy on the test set is right at the no-information rate.  Also, although this model have a high speficity (true negative rate), due to the nature of suicide prediction (and the implied impotus to interdict), it would be more desireable to have a high sensitivity (true positive rate).  
+
+Not shown above, however, are previous attempts where lower cost values were considered.  It was found when presented with cost values under 1, the lowest cost values were always chosen, resulting in models that only predicted the most common class (no suicide);  the no information rate.  These models were deemed less useful despite having similar overall accuracy (they had 0 sensitivity)
+
+Below a SVM model with a polynomial kernel is attempted.
+
+
+```{r}
+set.seed("1234567890")
+
+grid = expand.grid(C = seq(1, 5, length.out = 3)^2,
+                   degree = seq(1,5, 1),
+                   scale = seq(1, 5, length.out = 3)^2)
+
+
+svm.poly.fit <- train(Suicide ~., 
+                 data = train,
+                 method = "svmPoly",             #SVM with polynomial kernel from the kernlab package
+                 preProcess = c("center","scale"),
+                 tuneGrid = grid)
+
+
+svm.poly.fit
+
+svm.poly.predictions <- predict(svm.poly.fit, test)
+
+
+confusionMatrix(svm.poly.predictions, test$Suicide, positive = "1")
+```
+
+Unfortunately, the results for this one are the same as the SVM model with a linear kernel. This model has two additional hyperparamters in addition to cost: the degree of the polynomial, and a scalar.  Increasing both of these should make for more percise separations.  This only chooses a degree of 1, and the highest scalar available (25 in this case).  
+
+Below we'll try a SVM with a radial kernel, which will map to a higher dimension using kernel trick and hyperameters cost, and sigma which will lead to more complicated separations 
+
+
+```{r}
+set.seed("1234567890")
+
+grid = expand.grid(C = seq(1, 5, length.out = 5)^2,
+                   sigma = seq(.1,10, length.out = 5)^2)
+
+
+svm.rad.fit <- train(Suicide ~., 
+                 data = train,
+                 method = "svmRadial",             #SVM with radial kernel from the kernlab package
+                 preProcess = c("center","scale"),
+                 tuneGrid = grid)
+
+
+svm.rad.fit
+
+svm.rad.predictions <- predict(svm.rad.fit, test)
+
+
+confusionMatrix(svm.rad.predictions, test$Suicide, positive = "1")
+```
+
+This model chooses the highest sigma (100) and lowest cost (1), and guesses the negative class (no-suicide) for each testing sample.  It performs at the no-information rate, and is not useful.
+
+
+I suspect this data is not well seperable, which may be impacting the performance of these SVM models.  Also, becuase the dataset is fairly unbalaned, we would need an overall accuracy of over 85% for the model to be significantly better than guessing 'no suicide' in each instance; this would likely prove difficult with this dataset even given optimal pre-processing an feature engineering.  
+
+
+
+
+
+
+
+
+
+
